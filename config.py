@@ -94,9 +94,9 @@ async def start(m, c):
     await ensure_user(m.from_user.id, m.from_user.first_name)
 
     # Replace with your links
-    DEVELOPER_LINK = "https://t.me/YourDeveloperUsername"
-    CHANNEL_LINK = "https://t.me/YourChannelName"
-    SUPPORT_GROUP_LINK = "https://t.me/YourSupportGroup"
+    DEVELOPER_LINK = "https://t.me/HYE_BABU"
+    CHANNEL_LINK = "https://t.me/shizuka_bots"
+    SUPPORT_GROUP_LINK = "https://t.me/shizuka_support"
 
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("👨‍💻 Developer", url=DEVELOPER_LINK)],
