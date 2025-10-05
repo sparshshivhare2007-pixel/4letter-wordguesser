@@ -174,8 +174,8 @@ async def end_game(m, c):
     await m.reply_text(f"❌ Game ended by user. The word was {word}. Game Over!")
 
 # ---------- guess handling ----------
-@app.on_message(filters.text & ~filters.command())
-async def guess(m, c):
+@app.on_message(filters.command("hint"))
+async def hint(m, c):
     user_id = m.from_user.id
     text = m.text.strip().upper()
     if len(text) != 4:
