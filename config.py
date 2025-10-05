@@ -10,8 +10,13 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 DB_PATH = "four_letter_game.db"
-WORDS = ["CODE","PLAY","WORD","BOTS","GAME","CHAT","NOTE","TASK","TIME","FIRE",
-         "LAMP","TREE","BOOK","KING","QUEE","FISH","MOON","STAR","FORK","COIN"]
+MAX_ATTEMPTS = 30
+
+# 4-letter words list
+WORDS = [
+    "CODE","PLAY","WORD","BOTS","GAME","CHAT","NOTE","TASK","TIME","FIRE",
+    "LAMP","TREE","BOOK","KING","QUEE","FISH","MOON","STAR","FORK","COIN"
+]
 
 app = Client("four_letter_multiplayer", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -48,6 +53,11 @@ def check_guess(guess, word):
             feedback.append("❌")
     return "".join(feedback)
 
+async def ensure_user(user_id, name):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, name))
+        await db.commit()
+
 async def start_session(user_id):
     word = random.choice(WORDS)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -78,43 +88,40 @@ async def update_score(user_id, win=True):
             await db.execute("UPDATE users SET streak = 0 WHERE tg_id = ?", (user_id,))
         await db.commit()
 
-async def ensure_user(user_id, name):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT OR IGNORE INTO users (tg_id, name) VALUES (?, ?)", (user_id, name))
-        await db.commit()
-
-# ---------- bot commands ----------
+# ---------- start command ----------
 @app.on_message(filters.command("start"))
 async def start(m, c):
     await ensure_user(m.from_user.id, m.from_user.first_name)
-    await m.reply_text(
-        "Welcome to 4-letter multiplayer word guessing!\n"
-        "Use /play to start a game.\n"
-        "Try to guess the word. Feedback: ✅ correct, ⚪ present, ❌ absent.\n"
-        "Use /leaderboard to see top players."
+
+    # Replace with your links
+    DEVELOPER_LINK = "https://t.me/YourDeveloperUsername"
+    CHANNEL_LINK = "https://t.me/YourChannelName"
+    SUPPORT_GROUP_LINK = "https://t.me/YourSupportGroup"
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👨‍💻 Developer", url=DEVELOPER_LINK)],
+        [InlineKeyboardButton("📢 Channel", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🛠 Support", url=SUPPORT_GROUP_LINK)]
+    ])
+
+    image_path = "welcome_image.jpg"  # replace with your image file path or URL
+    caption = (
+        "👋 *Welcome to 4-Letter Multiplayer Word Guessing Bot!*\n\n"
+        "🎮 Guess the word, get feedback:\n"
+        "✅ Correct letter & position\n"
+        "⚪ Letter exists but wrong position\n"
+        "❌ Letter not in the word\n\n"
+        "Use the buttons below to contact Developer, join Channel or Support group."
     )
 
-@app.on_message(filters.command("play"))
-async def play(m, c):
-    user_id = m.from_user.id
-    await ensure_user(user_id, m.from_user.first_name)
-    session = await get_session(user_id)
-    if session:
-        await m.reply_text("You already have a game running! Start guessing.")
-    else:
-        await start_session(user_id)
-        await m.reply_text("🎮 Game started! Guess a 4-letter word.")
+    await m.reply_photo(
+        photo=image_path,
+        caption=caption,
+        parse_mode="markdown",
+        reply_markup=buttons
+    )
 
-@app.on_message(filters.command("leaderboard"))
-async def leaderboard(m, c):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT name, score FROM users ORDER BY score DESC LIMIT 10")
-        rows = await cur.fetchall()
-    text = "🏆 Top Players:\n"
-    for i, row in enumerate(rows, start=1):
-        text += f"{i}. {row[0]} - {row[1]} points\n"
-    await m.reply_text(text)
-
+# ---------- hint command ----------
 @app.on_message(filters.command("hint"))
 async def hint(m, c):
     user_id = m.from_user.id
@@ -132,6 +139,41 @@ async def hint(m, c):
         await db.commit()
     await m.reply_text(f"💡 Hint: The word contains the letter '{letter}'.")
 
+# ---------- leaderboard ----------
+@app.on_message(filters.command("leaderboard"))
+async def leaderboard(m, c):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT name, score FROM users ORDER BY score DESC LIMIT 10")
+        rows = await cur.fetchall()
+    text = "🏆 Top Players:\n" + "\n".join([f"{i+1}. {row[0]} - {row[1]}" for i, row in enumerate(rows)])
+    await m.reply_text(text)
+
+# ---------- play command ----------
+@app.on_message(filters.command("play"))
+async def play(m, c):
+    user_id = m.from_user.id
+    await ensure_user(user_id, m.from_user.first_name)
+    session = await get_session(user_id)
+    if session:
+        await m.reply_text("You already have a game running! Start guessing.")
+    else:
+        await start_session(user_id)
+        await m.reply_text("🎮 Game started! Guess a 4-letter word.")
+
+# ---------- end command ----------
+@app.on_message(filters.command("end"))
+async def end_game(m, c):
+    user_id = m.from_user.id
+    session = await get_session(user_id)
+    if not session:
+        await m.reply_text("You don't have any active game.")
+        return
+    session_id, word, attempts, hint_used = session
+    await delete_session(session_id)
+    await update_score(user_id, win=False)
+    await m.reply_text(f"❌ Game ended by user. The word was {word}. Game Over!")
+
+# ---------- guess handling ----------
 @app.on_message(filters.text & ~filters.command)
 async def guess(m, c):
     user_id = m.from_user.id
@@ -144,18 +186,22 @@ async def guess(m, c):
         await m.reply_text("Start a game first with /play")
         return
     session_id, word, attempts, hint_used = session
+
     await update_session_attempts(session_id)
+    attempts += 1
+
     feedback = check_guess(text, word)
+
     if text == word:
-        await m.reply_text(f"🎉 Correct! The word was {word} in {attempts+1} attempts.")
+        await m.reply_text(f"🎉 Correct! The word was {word} in {attempts} attempts.")
         await update_score(user_id, win=True)
         await delete_session(session_id)
+    elif attempts >= MAX_ATTEMPTS:
+        await m.reply_text(f"❌ Maximum attempts reached! The word was {word}. Game Over!")
+        await update_score(user_id, win=False)
+        await delete_session(session_id)
     else:
-        await m.reply_text(f"{feedback} | Attempts: {attempts+1}")
-        if attempts+1 >= 6:  # max attempts
-            await m.reply_text(f"❌ Game over! The word was {word}.")
-            await update_score(user_id, win=False)
-            await delete_session(session_id)
+        await m.reply_text(f"{feedback} | Attempts: {attempts}/{MAX_ATTEMPTS}")
 
 # ---------- startup ----------
 async def main():
