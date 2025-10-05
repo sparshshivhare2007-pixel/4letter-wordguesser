@@ -4,6 +4,10 @@ import asyncio
 import aiosqlite
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from dotenv import load_dotenv # <-- New Import
+
+# Load environment variables from .env file
+load_dotenv() # <-- New Function Call
 
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
@@ -34,7 +38,7 @@ async def init_db():
         await db.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
+            user_id INTEGER UNIQUE,
             word TEXT,
             attempts INTEGER DEFAULT 0,
             hint_used INTEGER DEFAULT 0
@@ -59,9 +63,12 @@ async def ensure_user(user_id, name):
         await db.commit()
 
 async def start_session(user_id):
+    # Ensure no existing session before starting new one
+    await delete_session_by_user_id(user_id) 
     word = random.choice(WORDS)
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO sessions (user_id, word) VALUES (?, ?)", (user_id, word))
+        # Note: We use user_id here as it's the unique key in sessions table
+        await db.execute("INSERT INTO sessions (user_id, word) VALUES (?, ?)", (user_id, word)) 
         await db.commit()
 
 async def get_session(user_id):
@@ -80,6 +87,11 @@ async def delete_session(session_id):
         await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         await db.commit()
 
+async def delete_session_by_user_id(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        await db.commit()
+        
 async def update_score(user_id, win=True):
     async with aiosqlite.connect(DB_PATH) as db:
         if win:
@@ -90,7 +102,7 @@ async def update_score(user_id, win=True):
 
 # ---------- start command ----------
 @app.on_message(filters.command("start"))
-async def start(m, c):
+async def start(c, m): # Swapped c and m for consistency with other handlers (though it often doesn't matter)
     await ensure_user(m.from_user.id, m.from_user.first_name)
 
     # Replace with your links
@@ -123,7 +135,7 @@ async def start(m, c):
 
 # ---------- hint command ----------
 @app.on_message(filters.command("hint"))
-async def hint(m, c):
+async def hint(c, m): # Swapped c and m for consistency
     user_id = m.from_user.id
     session = await get_session(user_id)
     if not session:
@@ -133,7 +145,17 @@ async def hint(m, c):
     if hint_used:
         await m.reply_text("You already used your hint for this game!")
         return
-    letter = random.choice(word)
+    
+    # Logic to provide hint (find an unguessed letter that is in the word)
+    guessed_letters = set(m.text.split()[0].upper()) if len(m.text.split()) > 1 else set() # Simple approximation of used letters
+    available_letters = [letter for letter in word if letter not in guessed_letters]
+    
+    if available_letters:
+        letter = random.choice(available_letters)
+    else:
+        # Fallback if no letters were guessed or logic is simple
+        letter = random.choice(word)
+        
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE sessions SET hint_used = 1 WHERE id = ?", (session_id,))
         await db.commit()
@@ -141,28 +163,33 @@ async def hint(m, c):
 
 # ---------- leaderboard ----------
 @app.on_message(filters.command("leaderboard"))
-async def leaderboard(m, c):
+async def leaderboard(c, m): # Swapped c and m for consistency
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT name, score FROM users ORDER BY score DESC LIMIT 10")
         rows = await cur.fetchall()
-    text = "🏆 Top Players:\n" + "\n".join([f"{i+1}. {row[0]} - {row[1]}" for i, row in enumerate(rows)])
+    
+    if not rows:
+        text = "🏆 No scores yet! Be the first to play."
+    else:
+        text = "🏆 Top Players:\n" + "\n".join([f"{i+1}. {row[0]} - {row[1]}" for i, row in enumerate(rows)])
+        
     await m.reply_text(text)
 
 # ---------- play command ----------
 @app.on_message(filters.command("play"))
-async def play(m, c):
+async def play(c, m): # Swapped c and m for consistency
     user_id = m.from_user.id
     await ensure_user(user_id, m.from_user.first_name)
     session = await get_session(user_id)
     if session:
-        await m.reply_text("You already have a game running! Start guessing.")
+        await m.reply_text("You already have a game running! Use the guess command or just type your 4-letter guess.")
     else:
         await start_session(user_id)
-        await m.reply_text("🎮 Game started! Guess a 4-letter word.")
+        await m.reply_text("🎮 Game started! Guess a 4-letter word. (e.g., CODE)")
 
 # ---------- end command ----------
 @app.on_message(filters.command("end"))
-async def end_game(m, c):
+async def end_game(c, m): # Swapped c and m for consistency
     user_id = m.from_user.id
     session = await get_session(user_id)
     if not session:
@@ -171,37 +198,46 @@ async def end_game(m, c):
     session_id, word, attempts, hint_used = session
     await delete_session(session_id)
     await update_score(user_id, win=False)
-    await m.reply_text(f"❌ Game ended by user. The word was {word}. Game Over!")
+    await m.reply_text(f"❌ Game ended by user. The word was **{word}**. Game Over!")
 
 # ---------- guess handling ----------
-@app.on_message(filters.command("hint"))
-async def hint(m, c):
+# This handler catches all non-command, non-empty messages of length 4.
+# NOTE: The original code had @app.on_message(filters.command("hint")) again here. This is wrong.
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "hint", "leaderboard", "play", "end"]))
+async def handle_guess(c, m):
     user_id = m.from_user.id
+    
+    # 1. Check if it is a valid 4-letter word guess
     text = m.text.strip().upper()
-    if len(text) != 4:
-        await m.reply_text("Please guess a 4-letter word.")
+    if len(text) != 4 or not text.isalpha():
+        # Only reply if it looks like a failed guess attempt
+        if len(text) > 0 and len(text) < 6:
+            await m.reply_text("Please guess a **4-letter word** only.")
         return
+
+    # 2. Check for active session
     session = await get_session(user_id)
     if not session:
         await m.reply_text("Start a game first with /play")
         return
+        
     session_id, word, attempts, hint_used = session
 
     await update_session_attempts(session_id)
-    attempts += 1
+    attempts += 1 # Update locally for feedback message
 
     feedback = check_guess(text, word)
 
     if text == word:
-        await m.reply_text(f"🎉 Correct! The word was {word} in {attempts} attempts.")
+        await m.reply_text(f"🎉 Correct! The word was **{word}** in **{attempts}** attempts.")
         await update_score(user_id, win=True)
         await delete_session(session_id)
     elif attempts >= MAX_ATTEMPTS:
-        await m.reply_text(f"❌ Maximum attempts reached! The word was {word}. Game Over!")
+        await m.reply_text(f"❌ Maximum attempts reached! The word was **{word}**. Game Over!")
         await update_score(user_id, win=False)
         await delete_session(session_id)
     else:
-        await m.reply_text(f"{feedback} | Attempts: {attempts}/{MAX_ATTEMPTS}")
+        await m.reply_text(f"**Your Guess:** {text}\n**Feedback:** {feedback}\nAttempts: {attempts}/{MAX_ATTEMPTS}")
 
 # ---------- startup ----------
 async def main():
