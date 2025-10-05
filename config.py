@@ -104,7 +104,7 @@ async def start(m, c):
         [InlineKeyboardButton("🛠 Support", url=SUPPORT_GROUP_LINK)]
     ])
 
-    image_path = "welcome_image.jpg"  # replace with your image file path or URL
+    image_path = "assets/sparsh.jpg"  # replace with your image file path or URL
     caption = (
         "👋 *Welcome to 4-Letter Multiplayer Word Guessing Bot!*\n\n"
         "🎮 Guess the word, get feedback:\n"
@@ -174,7 +174,7 @@ async def end_game(m, c):
     await m.reply_text(f"❌ Game ended by user. The word was {word}. Game Over!")
 
 # ---------- guess handling ----------
-@app.on_message(filters.text & ~filters.command)
+@app.on_message(filters.text & ~filters.command())
 async def guess(m, c):
     user_id = m.from_user.id
     text = m.text.strip().upper()
